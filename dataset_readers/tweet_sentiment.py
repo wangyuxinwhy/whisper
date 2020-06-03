@@ -104,10 +104,7 @@ class TweetSentimentDatasetReader(DatasetReader):
         if selected_text is not None:
             context = text
             answer = selected_text
-            additional_metadata = {
-                "selected_text": selected_text,
-                "text_id": text_id
-            }
+            additional_metadata["selected_text"] = selected_text
             first_answer_offset = context.find(answer)
 
             def tokenize_slice(start: int, end: int) -> Iterable[Token]:
@@ -158,6 +155,9 @@ class TweetSentimentDatasetReader(DatasetReader):
                 token_answer_span_end,
                 fields["text_with_sentiment"],
             )
+
+        if text_id is not None:
+            additional_metadata["text_id"] = text_id
 
         # make the metadata
         metadata = {

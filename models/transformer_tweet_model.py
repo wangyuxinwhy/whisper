@@ -44,6 +44,8 @@ class TransformerTweet(Model):
         self,
         vocab: Vocabulary,
         transformer_model_name: str = "bert-base-uncased",
+        jointly: bool = False,
+        dropout: Optional[float] = None,
         **kwargs
     ) -> None:
         super().__init__(vocab, **kwargs)
@@ -51,6 +53,12 @@ class TransformerTweet(Model):
             {"tokens": PretrainedTransformerEmbedder(transformer_model_name)}
         )
         self._linear_layer = nn.Linear(self._text_field_embedder.get_output_dim(), 2)
+        self.jointly = jointly
+
+        if dropout is not None:
+            self._dropout = nn.Dropout(dropout)
+        else:
+            self._dropout = None
 
         self._span_start_accuracy = CategoricalAccuracy()
         self._span_end_accuracy = CategoricalAccuracy()
@@ -68,6 +76,9 @@ class TransformerTweet(Model):
     ) -> Dict[str, torch.Tensor]:
 
         embedded_question = self._text_field_embedder(text_with_sentiment)
+        if self._dropout is not None:
+            embedded_question = self._dropout(embedded_question)
+
         logits = self._linear_layer(embedded_question)
         span_start_logits, span_end_logits = logits.split(1, dim=-1)
         span_start_logits = span_start_logits.squeeze(-1)
@@ -170,12 +181,15 @@ class TransformerTweet(Model):
                     character_end = len(metadata_entry["context"])
                 else:
                     end_token = text_with_sentiment_tokens[predicted_end]
-                    character_end = end_token.idx + len(sanitize_wordpiece(end_token.text))
+                    if end_token.idx == 0:
+                        character_end = end_token.idx + len(sanitize_wordpiece(end_token.text)) + 1
+                    else:
+                        character_end = end_token.idx + len(sanitize_wordpiece(end_token.text))
 
                 best_span_string = metadata_entry["text"][character_start:character_end].strip()
                 output_dict["best_span_str"].append(best_span_string)
 
-                answers = metadata_entry.get("selected_text")
+                answers = metadata_entry.get("selected_text", "")
                 if len(answers) > 0:
                     self._jaccard(best_span_string, answers)
 

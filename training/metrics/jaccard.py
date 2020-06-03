@@ -36,3 +36,10 @@ class Jaccard(Metric):
     def reset(self):
         self._jaccard = 0.0
         self._count = 0.0
+
+
+def simple_jaccard(str1, str2):
+    str1_set = set(str1.strip().split(" "))
+    str2_set = set(str2.strip().split(" "))
+    set3 = str1_set.intersection(str2_set)
+    return len(set3) / (len(str1_set) + len(str2_set) - len(set3))

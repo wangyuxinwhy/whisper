@@ -129,3 +129,20 @@ def get_best_span(
     span_start_indices = best_spans // passage_length
     span_end_indices = best_spans % passage_length
     return torch.stack([span_start_indices, span_end_indices], dim=-1)
+
+
+def get_candidate_span(
+    span_start_logits: torch.Tensor, span_end_logits: torch.Tensor, candidate_num
+) -> torch.Tensor:
+    batch_size, passage_length = span_start_logits.size()
+    device = span_start_logits.device
+    span_log_probs = span_start_logits.unsqueeze(2) + span_end_logits.unsqueeze(1)
+    span_log_mask = torch.triu(
+        torch.ones((passage_length, passage_length), device=device)
+    ).log()
+    valid_span_log_probs = span_log_probs + span_log_mask
+    valid_span_log_probs = valid_span_log_probs.view(batch_size, -1)
+    candidate_span = valid_span_log_probs.argsort(1, descending=True)[:, :candidate_num]
+    start_spans = candidate_span // passage_length
+    end_spans = candidate_span % passage_length
+    return torch.stack((start_spans, end_spans), dim=-1)
