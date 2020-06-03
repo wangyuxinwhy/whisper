@@ -19,7 +19,7 @@ from allennlp.training.metrics import BooleanAccuracy, CategoricalAccuracy
 
 from ..common import get_best_span, get_candidate_span
 from ..training.metrics import Jaccard
-
+import transformers
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +158,7 @@ class TweetJointly(Model):
             "best_span_scores": best_span_scores,
         }
 
-        loss = torch.tensor(.0)
+        loss = torch.tensor(.0).to(embedded_question.device)
         # sentiment task
         if self._sentiment_task:
             global_context_vec = self._sentiment_encoder(embedded_question)
@@ -308,8 +308,9 @@ class TweetJointly(Model):
 
     @staticmethod
     def get_candidate_span_mask(candidate_span: torch.Tensor, passage_length: int) -> torch.Tensor:
+        device = candidate_span.device
         batch_size, candidate_num = candidate_span.size()[:-1]
-        candidate_span_mask = torch.zeros(batch_size, candidate_num, passage_length)
+        candidate_span_mask = torch.zeros(batch_size, candidate_num, passage_length).to(device)
         for i in range(batch_size):
             for j in range(candidate_num):
                 span_start, span_end = candidate_span[i][j]
