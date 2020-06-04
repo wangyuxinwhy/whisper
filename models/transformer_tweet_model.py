@@ -46,7 +46,7 @@ class TransformerTweet(Model):
         transformer_model_name: str = "bert-base-uncased",
         jointly: bool = False,
         dropout: Optional[float] = None,
-        **kwargs
+        **kwargs,
     ) -> None:
         super().__init__(vocab, **kwargs)
         self._text_field_embedder = BasicTextFieldEmbedder(
@@ -150,8 +150,12 @@ class TransformerTweet(Model):
             best_spans = best_spans.detach().cpu().numpy()
 
             output_dict["best_span_str"] = []
-            for metadata_entry, best_span, cspan in zip(metadata, best_spans, text_span):
-                text_with_sentiment_tokens = metadata_entry["text_with_sentiment_tokens"]
+            for metadata_entry, best_span, cspan in zip(
+                metadata, best_spans, text_span
+            ):
+                text_with_sentiment_tokens = metadata_entry[
+                    "text_with_sentiment_tokens"
+                ]
 
                 predicted_start, predicted_end = tuple(best_span)
                 while (
@@ -182,11 +186,17 @@ class TransformerTweet(Model):
                 else:
                     end_token = text_with_sentiment_tokens[predicted_end]
                     if end_token.idx == 0:
-                        character_end = end_token.idx + len(sanitize_wordpiece(end_token.text)) + 1
+                        character_end = (
+                            end_token.idx + len(sanitize_wordpiece(end_token.text)) + 1
+                        )
                     else:
-                        character_end = end_token.idx + len(sanitize_wordpiece(end_token.text))
+                        character_end = end_token.idx + len(
+                            sanitize_wordpiece(end_token.text)
+                        )
 
-                best_span_string = metadata_entry["text"][character_start:character_end].strip()
+                best_span_string = metadata_entry["text"][
+                    character_start:character_end
+                ].strip()
                 output_dict["best_span_str"].append(best_span_string)
 
                 answers = metadata_entry.get("selected_text", "")
@@ -201,5 +211,5 @@ class TransformerTweet(Model):
             "start_acc": self._span_start_accuracy.get_metric(reset),
             "end_acc": self._span_end_accuracy.get_metric(reset),
             "span_acc": self._span_accuracy.get_metric(reset),
-            "jaccard": jaccard
+            "jaccard": jaccard,
         }

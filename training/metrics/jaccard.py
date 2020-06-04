@@ -8,7 +8,6 @@ from overrides import overrides
 
 @Metric.register("jaccard")
 class Jaccard(Metric):
-
     def __init__(self):
         self._jaccard = 0.0
         self._count = 0.0

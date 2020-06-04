@@ -19,7 +19,6 @@ from allennlp.training.metrics import BooleanAccuracy, CategoricalAccuracy
 
 from ..common import get_best_span, get_candidate_span
 from ..training.metrics import Jaccard
-import transformers
 
 logger = logging.getLogger(__name__)
 
@@ -30,19 +29,18 @@ class TweetJointly(Model):
         self,
         vocab: Vocabulary,
         transformer_model_name: str = "bert-base-uncased",
-
         sentiment_task: bool = False,
-        sentiment_task_weight: float = 1.,
+        sentiment_task_weight: float = 1.0,
+        sentiment_classification_with_label: bool = True,
         sentiment_seq2vec: Optional[Seq2VecEncoder] = None,
-
         candidate_span_task: bool = False,
-        candidate_span_task_weight: float = 1.,
+        candidate_span_task_weight: float = 1.0,
         candidate_span_num: int = 5,
         candidate_classification_layer_units: int = 128,
         # candidate_span_seq2vec: Optional[Seq2VecEncoder] = None,  # GlobalAveragePooling
         candidate_span_extra_feature: str = "",
         dropout: Optional[float] = None,
-        **kwargs
+        **kwargs,
     ) -> None:
         super().__init__(vocab, **kwargs)
         self._text_field_embedder = BasicTextFieldEmbedder(
@@ -52,7 +50,7 @@ class TweetJointly(Model):
         self._linear_layer = nn.Sequential(
             nn.Linear(self._text_field_embedder.get_output_dim(), 128),
             nn.ReLU(),
-            nn.Linear(128, 2)
+            nn.Linear(128, 2),
         )
         self._span_start_accuracy = CategoricalAccuracy()
         self._span_end_accuracy = CategoricalAccuracy()
@@ -63,13 +61,22 @@ class TweetJointly(Model):
         self._sentiment_task = sentiment_task
         if self._sentiment_task:
             self._sentiment_classification_accuracy = CategoricalAccuracy()
-            self.register_buffer("sentiment_task_weight", torch.tensor(sentiment_task_weight))
-
+            self.register_buffer(
+                "sentiment_task_weight", torch.tensor(sentiment_task_weight)
+            )
+            self._sentiment_classification_with_label = (
+                sentiment_classification_with_label
+            )
             if sentiment_seq2vec is None:
-                raise ConfigurationError("sentiment task is True, we need a sentiment seq2vec encoder")
+                raise ConfigurationError(
+                    "sentiment task is True, we need a sentiment seq2vec encoder"
+                )
             else:
                 self._sentiment_encoder = sentiment_seq2vec
-                self._sentiment_linear = nn.Linear(self._sentiment_encoder.get_output_dim(), vocab.get_vocab_size("labels"))
+                self._sentiment_linear = nn.Linear(
+                    self._sentiment_encoder.get_output_dim(),
+                    vocab.get_vocab_size("labels"),
+                )
 
         # candidate span task
         self._candidate_span_task = candidate_span_task
@@ -78,12 +85,16 @@ class TweetJointly(Model):
             assert candidate_span_task_weight > 0
             assert candidate_classification_layer_units > 0
             self._candidate_span_num = candidate_span_num
-            self.register_buffer("candidate_span_task_weight", torch.tensor(candidate_span_task_weight))
-            self._candidate_classification_layer_units = candidate_classification_layer_units
+            self.register_buffer(
+                "candidate_span_task_weight", torch.tensor(candidate_span_task_weight)
+            )
+            self._candidate_classification_layer_units = (
+                candidate_classification_layer_units
+            )
             self._span_classification_accuracy = CategoricalAccuracy()
             self._candidate_span_linear = nn.Linear(
                 self._text_field_embedder.get_output_dim(),
-                self._candidate_classification_layer_units
+                self._candidate_classification_layer_units,
             )
 
             if "context" in candidate_span_extra_feature:
@@ -93,15 +104,15 @@ class TweetJointly(Model):
             if "logits" in candidate_span_extra_feature:
                 self._candidate_with_logits = True
                 self._candidate_span_vec_linear = nn.Linear(
-                    self._candidate_classification_layer_units + 1,
-                    1
+                    self._candidate_classification_layer_units + 1, 1
                 )
             else:
                 self._candidate_with_logits = False
                 self._candidate_span_vec_linear = nn.Linear(
-                    self._candidate_classification_layer_units,
-                    1
+                    self._candidate_classification_layer_units, 1
                 )
+
+            self._candidate_jaccard = Jaccard()
 
         if dropout is not None:
             self._dropout = nn.Dropout(dropout)
@@ -158,16 +169,21 @@ class TweetJointly(Model):
             "best_span_scores": best_span_scores,
         }
 
-        loss = torch.tensor(.0).to(embedded_question.device)
+        loss = torch.tensor(0.0).to(embedded_question.device)
         # sentiment task
         if self._sentiment_task:
-            global_context_vec = self._sentiment_encoder(embedded_question)
+            if self._sentiment_classification_with_label:
+                global_context_vec = self._sentiment_encoder(embedded_question)
+            else:
+                embedded_only_text = self._text_field_embedder(text)
+                if self._dropout is not None:
+                    embedded_only_text = self._dropout(embedded_only_text)
+                global_context_vec = self._sentiment_encoder(embedded_only_text)
             sentiment_logits = self._sentiment_linear(global_context_vec)
             sentiment_probs = torch.softmax(sentiment_logits, dim=-1)
 
             self._sentiment_classification_accuracy(sentiment_probs, sentiment)
             sentiment_loss = cross_entropy(sentiment_logits, sentiment)
-            print(f"sentiment loss: {sentiment_loss}")
             loss.add_(self.sentiment_task_weight * sentiment_loss)
 
             predict_sentiment_idx = sentiment_probs.argmax(dim=-1)
@@ -180,41 +196,97 @@ class TweetJointly(Model):
 
         # span classification
         if self._candidate_span_task:
+            text_features_for_candidate = self._candidate_span_linear(embedded_question)
+            text_features_for_candidate = torch.relu(text_features_for_candidate)
             with torch.no_grad():
                 # batch_size * candidate_num * 2
-                candidate_span = get_candidate_span(span_start_logits, span_end_logits, self._candidate_span_num)
-                output_dict["candidate_spans"] = candidate_span.tolist()
+                candidate_span = get_candidate_span(
+                    span_start_logits, span_end_logits, self._candidate_span_num
+                )
+                candidate_span_list = candidate_span.tolist()
+                output_dict["candidate_spans"] = candidate_span_list
             if selected_text_span is not None:
-                text_features_for_candidate = self._candidate_span_linear(embedded_question)
-                text_features_for_candidate = torch.relu(text_features_for_candidate)
-                candidate_span_adjust, candidate_span_label = self.candidate_span_with_labels(candidate_span, selected_text_span)
-                # batch_size * candidate_num * passage_length
-                candidate_span_mask = self.get_candidate_span_mask(candidate_span_adjust, text_features_for_candidate.size()[1])
-                if self._candidate_with_context:
-                    candidate_span_mask[:, :, 0] = 1
-                # batch_size * candidate_num * passage_length * self._candidate_classification_layer_units
-                masked_features = text_features_for_candidate.unsqueeze(1) * candidate_span_mask.unsqueeze(-1)
-                span_length = candidate_span_mask.sum(-1)
-                masked_features_summed = masked_features.sum(2)
-                # batch_size * candidate_num * self._candidate_classification_layer_units
-                span_feature_vec = masked_features_summed / span_length.unsqueeze(-1)
-                if self._candidate_with_logits:
-                    candidate_span_start_logits = torch.gather(span_start_logits, 1, candidate_span_adjust[:, :, 0])
-                    candidate_span_end_logits = torch.gather(span_end_logits, 1, candidate_span_adjust[:, :, 1])
-                    candidate_span_sum_logits = candidate_span_start_logits + candidate_span_end_logits
-                    span_feature_vec = torch.cat((span_feature_vec, candidate_span_sum_logits.unsqueeze(2)), -1)
-                # batch_size * candidate_num
-                span_classification_logits = self._candidate_span_vec_linear(span_feature_vec).squeeze()
-                span_classification_probs = torch.softmax(span_classification_logits, -1)
-                self._span_classification_accuracy(span_classification_probs, candidate_span_label)
-                candidate_span_loss = cross_entropy(span_classification_logits, candidate_span_label)
-                output_dict["span_classification_probs"] = span_classification_probs
+                candidate_span, candidate_span_label = self.candidate_span_with_labels(
+                    candidate_span, selected_text_span
+                )
+            else:
+                candidate_span_label = None
+            # batch_size * candidate_num * passage_length
+            candidate_span_mask = self.get_candidate_span_mask(
+                candidate_span, text_features_for_candidate.size()[1]
+            )
+            if self._candidate_with_context:
+                candidate_span_mask[:, :, 0] = 1
+            # batch_size * candidate_num * passage_length * self._candidate_classification_layer_units
+            masked_features = text_features_for_candidate.unsqueeze(
+                1
+            ) * candidate_span_mask.unsqueeze(-1)
+            span_length = candidate_span_mask.sum(-1)
+            masked_features_summed = masked_features.sum(2)
+            # batch_size * candidate_num * self._candidate_classification_layer_units
+            span_feature_vec = masked_features_summed / span_length.unsqueeze(-1)
+            if self._candidate_with_logits:
+                candidate_span_start_logits = torch.gather(
+                    span_start_logits, 1, candidate_span[:, :, 0]
+                )
+                candidate_span_end_logits = torch.gather(
+                    span_end_logits, 1, candidate_span[:, :, 1]
+                )
+                candidate_span_sum_logits = (
+                    candidate_span_start_logits + candidate_span_end_logits
+                )
+                span_feature_vec = torch.cat(
+                    (span_feature_vec, candidate_span_sum_logits.unsqueeze(2)), -1
+                )
+            # batch_size * candidate_num
+            span_classification_logits = self._candidate_span_vec_linear(
+                span_feature_vec
+            ).squeeze()
+            span_classification_probs = torch.softmax(span_classification_logits, -1)
+            output_dict["span_classification_probs"] = span_classification_probs
+            candidate_best_span_idx = span_classification_probs.argmax(dim=-1)
+            view_idx = (
+                candidate_best_span_idx
+                + torch.arange(0, end=candidate_best_span_idx.shape[0])
+                * self._candidate_span_num
+            )
+            candidate_span_view = candidate_span.view(-1, 2)
+            candidate_best_spans = candidate_span_view.index_select(0, view_idx)
+            output_dict["candidate_best_spans"] = candidate_best_spans.tolist()
+
+            if selected_text_span is not None:
+                self._span_classification_accuracy(
+                    span_classification_probs, candidate_span_label
+                )
+                candidate_span_loss = cross_entropy(
+                    span_classification_logits, candidate_span_label
+                )
                 weighted_loss = self.candidate_span_task_weight * candidate_span_loss
                 if candidate_span_loss > 1e2:
                     print(f"candidate loss: {candidate_span_loss}")
                     print(f"span_classification_logits: {span_classification_logits}")
                     print(f"candidate_span_label: {candidate_span_label}")
                 loss.add_(weighted_loss)
+
+                candidate_best_spans = candidate_best_spans.detach().cpu().numpy()
+                output_dict["best_candidate_span_str"] = []
+                for metadata_entry, best_span in zip(metadata, candidate_best_spans):
+                    text_with_sentiment_tokens = metadata_entry[
+                        "text_with_sentiment_tokens"
+                    ]
+                    predicted_start, predicted_end = tuple(best_span)
+                    if predicted_end >= len(text_with_sentiment_tokens):
+                        predicted_end = len(text_with_sentiment_tokens) - 1
+                    best_span_string = self.span_tokens_to_text(
+                        metadata_entry["text"],
+                        text_with_sentiment_tokens,
+                        predicted_start,
+                        predicted_end,
+                    )
+                    output_dict["best_candidate_span_str"].append(best_span_string)
+                    answers = metadata_entry.get("selected_text", "")
+                    if len(answers) > 0:
+                        self._candidate_jaccard(best_span_string, answers)
 
         # Compute the loss for training.
         if selected_text_span is not None:
@@ -249,48 +321,22 @@ class TweetJointly(Model):
 
             output_dict["loss"] = loss
 
-        # Compute Jaccard
-        if metadata is not None:
+            # compute best span jaccard
             best_spans = best_spans.detach().cpu().numpy()
-
             output_dict["best_span_str"] = []
-            for metadata_entry, best_span, cspan in zip(metadata, best_spans, text_span):
-                text_with_sentiment_tokens = metadata_entry["text_with_sentiment_tokens"]
+
+            for metadata_entry, best_span in zip(metadata, best_spans):
+                text_with_sentiment_tokens = metadata_entry[
+                    "text_with_sentiment_tokens"
+                ]
 
                 predicted_start, predicted_end = tuple(best_span)
-                while (
-                    predicted_start >= 0
-                    and text_with_sentiment_tokens[predicted_start].idx is None
-                ):
-                    predicted_start -= 1
-                if predicted_start < 0:
-                    logger.warning(
-                        f"Could not map the token '{text_with_sentiment_tokens[best_span[0]].text}' at index "
-                        f"'{best_span[0]}' to an offset in the original text."
-                    )
-                    character_start = 0
-                else:
-                    character_start = text_with_sentiment_tokens[predicted_start].idx
-
-                while (
-                    predicted_end < len(text_with_sentiment_tokens)
-                    and text_with_sentiment_tokens[predicted_end].idx is None
-                ):
-                    predicted_end += 1
-                if predicted_end >= len(text_with_sentiment_tokens):
-                    logger.warning(
-                        f"Could not map the token '{text_with_sentiment_tokens[best_span[1]].text}' at index "
-                        f"'{best_span[1]}' to an offset in the original text."
-                    )
-                    character_end = len(metadata_entry["context"])
-                else:
-                    end_token = text_with_sentiment_tokens[predicted_end]
-                    if end_token.idx == 0:
-                        character_end = end_token.idx + len(sanitize_wordpiece(end_token.text)) + 1
-                    else:
-                        character_end = end_token.idx + len(sanitize_wordpiece(end_token.text))
-
-                best_span_string = metadata_entry["text"][character_start:character_end].strip()
+                best_span_string = self.span_tokens_to_text(
+                    metadata_entry["text"],
+                    text_with_sentiment_tokens,
+                    predicted_start,
+                    predicted_end,
+                )
                 output_dict["best_span_str"].append(best_span_string)
 
                 answers = metadata_entry.get("selected_text", "")
@@ -300,22 +346,82 @@ class TweetJointly(Model):
         return output_dict
 
     @staticmethod
-    def candidate_span_with_labels(candidate_span: torch.Tensor, selected_text_span: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def candidate_span_with_labels(
+        candidate_span: torch.Tensor, selected_text_span: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         correct_span_idx = (candidate_span == selected_text_span.unsqueeze(1)).prod(-1)
-        candidate_span_adjust = torch.where(~(correct_span_idx.unsqueeze(-1) == 1), candidate_span, selected_text_span.unsqueeze(1))
+        candidate_span_adjust = torch.where(
+            ~(correct_span_idx.unsqueeze(-1) == 1),
+            candidate_span,
+            selected_text_span.unsqueeze(1),
+        )
         candidate_span_label = correct_span_idx.argmax(-1)
         return candidate_span_adjust, candidate_span_label
 
     @staticmethod
-    def get_candidate_span_mask(candidate_span: torch.Tensor, passage_length: int) -> torch.Tensor:
+    def get_candidate_span_mask(
+        candidate_span: torch.Tensor, passage_length: int
+    ) -> torch.Tensor:
         device = candidate_span.device
         batch_size, candidate_num = candidate_span.size()[:-1]
-        candidate_span_mask = torch.zeros(batch_size, candidate_num, passage_length).to(device)
+        candidate_span_mask = torch.zeros(batch_size, candidate_num, passage_length).to(
+            device
+        )
         for i in range(batch_size):
             for j in range(candidate_num):
                 span_start, span_end = candidate_span[i][j]
-                candidate_span_mask[i][j][span_start: span_end+1] = 1
+                candidate_span_mask[i][j][span_start : span_end + 1] = 1
         return candidate_span_mask
+
+    @staticmethod
+    def span_tokens_to_text(source_text, tokens, span_start, span_end):
+        text_with_sentiment_tokens = tokens
+        predicted_start = span_start
+        predicted_end = span_end
+
+        while (
+            predicted_start >= 0
+            and text_with_sentiment_tokens[predicted_start].idx is None
+        ):
+            predicted_start -= 1
+        if predicted_start < 0:
+            logger.warning(
+                f"Could not map the token '{text_with_sentiment_tokens[span_start].text}' at index "
+                f"'{span_start}' to an offset in the original text."
+            )
+            character_start = 0
+        else:
+            character_start = text_with_sentiment_tokens[predicted_start].idx
+
+        while (
+            predicted_end < len(text_with_sentiment_tokens)
+            and text_with_sentiment_tokens[predicted_end].idx is None
+        ):
+            predicted_end -= 1
+
+        if predicted_end >= len(text_with_sentiment_tokens):
+            print(text_with_sentiment_tokens)
+            print(len(text_with_sentiment_tokens))
+            print(span_end)
+            print(predicted_end)
+            logger.warning(
+                f"Could not map the token '{text_with_sentiment_tokens[span_end].text}' at index "
+                f"'{span_end}' to an offset in the original text."
+            )
+            character_end = len(source_text)
+        else:
+            end_token = text_with_sentiment_tokens[predicted_end]
+            if end_token.idx == 0:
+                character_end = (
+                        end_token.idx + len(sanitize_wordpiece(end_token.text)) + 1
+                )
+            else:
+                character_end = end_token.idx + len(
+                    sanitize_wordpiece(end_token.text)
+                )
+
+        best_span_string = source_text[character_start:character_end].strip()
+        return best_span_string
 
     def get_metrics(self, reset: bool = False) -> Dict[str, float]:
         jaccard = self._jaccard.get_metric(reset)
@@ -323,10 +429,15 @@ class TweetJointly(Model):
             "start_acc": self._span_start_accuracy.get_metric(reset),
             "end_acc": self._span_end_accuracy.get_metric(reset),
             "span_acc": self._span_accuracy.get_metric(reset),
-            "jaccard": jaccard
+            "jaccard": jaccard,
         }
         if self._candidate_span_task:
-            metrics["candidate_span_acc"] = self._span_classification_accuracy.get_metric(reset)
+            metrics[
+                "candidate_span_acc"
+            ] = self._span_classification_accuracy.get_metric(reset)
+            metrics["candidate_jaccard"] = self._candidate_jaccard.get_metric(reset)
         if self._sentiment_task:
-            metrics["sentiment_acc"] = self._sentiment_classification_accuracy.get_metric(reset)
+            metrics[
+                "sentiment_acc"
+            ] = self._sentiment_classification_accuracy.get_metric(reset)
         return metrics
