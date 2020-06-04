@@ -247,7 +247,7 @@ class TweetJointly(Model):
             candidate_best_span_idx = span_classification_probs.argmax(dim=-1)
             view_idx = (
                 candidate_best_span_idx
-                + torch.arange(0, end=candidate_best_span_idx.shape[0])
+                + torch.arange(0, end=candidate_best_span_idx.shape[0]).to(candidate_best_span_idx.device)
                 * self._candidate_span_num
             )
             candidate_span_view = candidate_span.view(-1, 2)
@@ -321,27 +321,27 @@ class TweetJointly(Model):
 
             output_dict["loss"] = loss
 
-            # compute best span jaccard
-            best_spans = best_spans.detach().cpu().numpy()
-            output_dict["best_span_str"] = []
+        # compute best span jaccard
+        best_spans = best_spans.detach().cpu().numpy()
+        output_dict["best_span_str"] = []
 
-            for metadata_entry, best_span in zip(metadata, best_spans):
-                text_with_sentiment_tokens = metadata_entry[
-                    "text_with_sentiment_tokens"
-                ]
+        for metadata_entry, best_span in zip(metadata, best_spans):
+            text_with_sentiment_tokens = metadata_entry[
+                "text_with_sentiment_tokens"
+            ]
 
-                predicted_start, predicted_end = tuple(best_span)
-                best_span_string = self.span_tokens_to_text(
-                    metadata_entry["text"],
-                    text_with_sentiment_tokens,
-                    predicted_start,
-                    predicted_end,
-                )
-                output_dict["best_span_str"].append(best_span_string)
+            predicted_start, predicted_end = tuple(best_span)
+            best_span_string = self.span_tokens_to_text(
+                metadata_entry["text"],
+                text_with_sentiment_tokens,
+                predicted_start,
+                predicted_end,
+            )
+            output_dict["best_span_str"].append(best_span_string)
 
-                answers = metadata_entry.get("selected_text", "")
-                if len(answers) > 0:
-                    self._jaccard(best_span_string, answers)
+            answers = metadata_entry.get("selected_text", "")
+            if len(answers) > 0:
+                self._jaccard(best_span_string, answers)
 
         return output_dict
 
