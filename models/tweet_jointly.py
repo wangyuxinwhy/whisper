@@ -10,11 +10,11 @@ from allennlp.nn import util
 from allennlp.data import Vocabulary
 from allennlp.models.model import Model
 from allennlp.modules import Seq2VecEncoder
+from allennlp.modules.span_extractors import SpanExtractor, EndpointSpanExtractor
 from allennlp.common.util import sanitize_wordpiece
 from allennlp.common.checks import ConfigurationError
 from allennlp.modules.text_field_embedders import BasicTextFieldEmbedder
 from allennlp.modules.token_embedders import PretrainedTransformerEmbedder
-from allennlp.nn.util import get_token_ids_from_text_field_tensors
 from allennlp.training.metrics import BooleanAccuracy, CategoricalAccuracy
 
 from ..common import get_best_span, get_candidate_span
@@ -37,8 +37,8 @@ class TweetJointly(Model):
         candidate_span_task_weight: float = 1.0,
         candidate_span_num: int = 5,
         candidate_classification_layer_units: int = 128,
-        # candidate_span_seq2vec: Optional[Seq2VecEncoder] = None,  # GlobalAveragePooling
-        candidate_span_extra_feature: str = "",
+        candidate_span_extractor: Optional[SpanExtractor] = None,
+        candidate_span_with_logits: bool = False,
         dropout: Optional[float] = None,
         **kwargs,
     ) -> None:
@@ -97,19 +97,22 @@ class TweetJointly(Model):
                 self._candidate_classification_layer_units,
             )
 
-            if "context" in candidate_span_extra_feature:
-                self._candidate_with_context = True
+            if candidate_span_extractor is None:
+                self._candidate_span_extractor = EndpointSpanExtractor(
+                    input_dim=self._candidate_classification_layer_units
+                )
             else:
-                self._candidate_with_context = False
-            if "logits" in candidate_span_extra_feature:
+                self._candidate_span_extractor = candidate_span_extractor
+
+            if candidate_span_with_logits:
                 self._candidate_with_logits = True
                 self._candidate_span_vec_linear = nn.Linear(
-                    self._candidate_classification_layer_units + 1, 1
+                    self._candidate_span_extractor.get_output_dim() + 1, 1
                 )
             else:
                 self._candidate_with_logits = False
                 self._candidate_span_vec_linear = nn.Linear(
-                    self._candidate_classification_layer_units, 1
+                    self._candidate_span_extractor.get_output_dim(), 1
                 )
 
             self._candidate_jaccard = Jaccard()
@@ -141,7 +144,7 @@ class TweetJointly(Model):
         span_end_logits = span_end_logits.squeeze(-1)
 
         possible_answer_mask = torch.zeros_like(
-            get_token_ids_from_text_field_tensors(text_with_sentiment)
+            util.get_token_ids_from_text_field_tensors(text_with_sentiment)
         ).bool()
         for i, (start, end) in enumerate(text_span):
             possible_answer_mask[i, start : end + 1] = True
@@ -196,6 +199,7 @@ class TweetJointly(Model):
 
         # span classification
         if self._candidate_span_task:
+            # shape: (batch_size, passage_length, embedding_dim)
             text_features_for_candidate = self._candidate_span_linear(embedded_question)
             text_features_for_candidate = torch.relu(text_features_for_candidate)
             with torch.no_grad():
@@ -211,20 +215,25 @@ class TweetJointly(Model):
                 )
             else:
                 candidate_span_label = None
-            # batch_size * candidate_num * passage_length
-            candidate_span_mask = self.get_candidate_span_mask(
-                candidate_span, text_features_for_candidate.size()[1]
+            # shape: (batch_size, candidate_num, span_extractor_output_dim)
+            span_feature_vec = self._candidate_span_extractor(
+                text_features_for_candidate, candidate_span
             )
-            if self._candidate_with_context:
-                candidate_span_mask[:, :, 0] = 1
-            # batch_size * candidate_num * passage_length * self._candidate_classification_layer_units
-            masked_features = text_features_for_candidate.unsqueeze(
-                1
-            ) * candidate_span_mask.unsqueeze(-1)
-            span_length = candidate_span_mask.sum(-1)
-            masked_features_summed = masked_features.sum(2)
-            # batch_size * candidate_num * self._candidate_classification_layer_units
-            span_feature_vec = masked_features_summed / span_length.unsqueeze(-1)
+
+            # # batch_size * candidate_num * passage_length
+            # candidate_span_mask = self.get_candidate_span_mask(
+            #     candidate_span, text_features_for_candidate.size()[1]
+            # )
+            # if self._candidate_with_context:
+            #     candidate_span_mask[:, :, 0] = 1
+            # # batch_size * candidate_num * passage_length * self._candidate_classification_layer_units
+            # masked_features = text_features_for_candidate.unsqueeze(
+            #     1
+            # ) * candidate_span_mask.unsqueeze(-1)
+            # span_length = candidate_span_mask.sum(-1)
+            # masked_features_summed = masked_features.sum(2)
+            # # batch_size * candidate_num * self._candidate_classification_layer_units
+            # span_feature_vec = masked_features_summed / span_length.unsqueeze(-1)
             if self._candidate_with_logits:
                 candidate_span_start_logits = torch.gather(
                     span_start_logits, 1, candidate_span[:, :, 0]
