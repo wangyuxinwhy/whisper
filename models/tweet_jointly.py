@@ -256,7 +256,9 @@ class TweetJointly(Model):
             candidate_best_span_idx = span_classification_probs.argmax(dim=-1)
             view_idx = (
                 candidate_best_span_idx
-                + torch.arange(0, end=candidate_best_span_idx.shape[0]).to(candidate_best_span_idx.device)
+                + torch.arange(0, end=candidate_best_span_idx.shape[0]).to(
+                    candidate_best_span_idx.device
+                )
                 * self._candidate_span_num
             )
             candidate_span_view = candidate_span.view(-1, 2)
@@ -335,9 +337,7 @@ class TweetJointly(Model):
         output_dict["best_span_str"] = []
 
         for metadata_entry, best_span in zip(metadata, best_spans):
-            text_with_sentiment_tokens = metadata_entry[
-                "text_with_sentiment_tokens"
-            ]
+            text_with_sentiment_tokens = metadata_entry["text_with_sentiment_tokens"]
 
             predicted_start, predicted_end = tuple(best_span)
             best_span_string = self.span_tokens_to_text(
@@ -422,12 +422,10 @@ class TweetJointly(Model):
             end_token = text_with_sentiment_tokens[predicted_end]
             if end_token.idx == 0:
                 character_end = (
-                        end_token.idx + len(sanitize_wordpiece(end_token.text)) + 1
+                    end_token.idx + len(sanitize_wordpiece(end_token.text)) + 1
                 )
             else:
-                character_end = end_token.idx + len(
-                    sanitize_wordpiece(end_token.text)
-                )
+                character_end = end_token.idx + len(sanitize_wordpiece(end_token.text))
 
         best_span_string = source_text[character_start:character_end].strip()
         return best_span_string
