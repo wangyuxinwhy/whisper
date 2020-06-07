@@ -22,3 +22,12 @@ def batch_span_jaccard(candidate_spans: torch.Tensor, golden_span: torch.Tensor)
     divisor = (candidate_span_width - dividend) + golden_span_width.unsqueeze(1)
     span_jaccard = torch.true_divide(dividend, divisor)
     return span_jaccard
+
+
+def get_sequence_distance_from_span_endpoint(sequence_length: int, span_endpoint: torch.Tensor):
+    batch_size = span_endpoint.size(0)
+    distance_range = torch.arange(0, sequence_length, device=span_endpoint.device).repeat(batch_size, 1)
+    distance_part1 = (distance_range - span_endpoint.unsqueeze(1)).clamp_min(0)
+    distance_part2 = -(distance_range - span_endpoint.unsqueeze(1)).clamp_max(0)
+    distance = distance_part1 + distance_part2
+    return distance

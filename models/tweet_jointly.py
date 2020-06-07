@@ -17,6 +17,7 @@ from allennlp.modules.text_field_embedders import BasicTextFieldEmbedder
 from allennlp.modules.token_embedders import PretrainedTransformerEmbedder
 from allennlp.training.metrics import BooleanAccuracy, CategoricalAccuracy
 
+from ..nn.util import get_sequence_distance_from_span_endpoint
 from ..common import get_best_span, get_candidate_span
 from ..training.metrics import Jaccard
 
@@ -29,6 +30,8 @@ class TweetJointly(Model):
         self,
         vocab: Vocabulary,
         transformer_model_name: str = "bert-base-uncased",
+        smoothing: bool = False,
+        smooth_alpha: float = 0.7,
         sentiment_task: bool = False,
         sentiment_task_weight: float = 1.0,
         sentiment_classification_with_label: bool = True,
@@ -56,6 +59,13 @@ class TweetJointly(Model):
         self._span_end_accuracy = CategoricalAccuracy()
         self._span_accuracy = BooleanAccuracy()
         self._jaccard = Jaccard()
+
+        self._smoothing = smoothing
+        self._smooth_alpha = smooth_alpha
+        if smoothing:
+            self._loss = nn.KLDivLoss(reduction="batchmean")
+        else:
+            self._loss = nn.CrossEntropyLoss()
 
         # sentiment task
         self._sentiment_task = sentiment_task
@@ -309,24 +319,42 @@ class TweetJointly(Model):
                 selected_text_span,
                 span_mask.unsqueeze(-1).expand_as(best_spans),
             )
+            if not self._smoothing:
+                start_loss = cross_entropy(span_start_logits, span_start, ignore_index=-1)
+                if torch.any(start_loss > 1e9):
+                    logger.critical("Start loss too high (%r)", start_loss)
+                    logger.critical("span_start_logits: %r", span_start_logits)
+                    logger.critical("span_start: %r", span_start)
+                    assert False
 
-            start_loss = cross_entropy(span_start_logits, span_start, ignore_index=-1)
-            if torch.any(start_loss > 1e9):
-                logger.critical("Start loss too high (%r)", start_loss)
-                logger.critical("span_start_logits: %r", span_start_logits)
-                logger.critical("span_start: %r", span_start)
-                assert False
-
-            end_loss = cross_entropy(span_end_logits, span_end, ignore_index=-1)
-            if torch.any(end_loss > 1e9):
-                logger.critical("End loss too high (%r)", end_loss)
-                logger.critical("span_end_logits: %r", span_end_logits)
-                logger.critical("span_end: %r", span_end)
-                assert False
+                end_loss = cross_entropy(span_end_logits, span_end, ignore_index=-1)
+                if torch.any(end_loss > 1e9):
+                    logger.critical("End loss too high (%r)", end_loss)
+                    logger.critical("span_end_logits: %r", span_end_logits)
+                    logger.critical("span_end: %r", span_end)
+                    assert False
+            else:
+                sequence_length = span_start_logits.size(1)
+                device = span_start.device
+                start_distance = get_sequence_distance_from_span_endpoint(sequence_length, span_start)
+                start_smooth_probs = torch.exp(start_distance * torch.log(torch.tensor(self._smooth_alpha).to(device)))
+                start_smooth_probs = start_smooth_probs * possible_answer_mask
+                start_smooth_probs = start_smooth_probs / start_smooth_probs.sum(-1, keepdim=True)
+                span_start_log_probs = span_start_logits - torch.log(torch.exp(span_start_logits).sum(-1)).unsqueeze(-1)
+                end_distance = get_sequence_distance_from_span_endpoint(sequence_length, span_end)
+                end_smooth_probs = torch.exp(end_distance * torch.log(torch.tensor(self._smooth_alpha).to(device)))
+                end_smooth_probs = end_smooth_probs * possible_answer_mask
+                end_smooth_probs = end_smooth_probs / end_smooth_probs.sum(-1, keepdim=True)
+                span_end_log_probs = span_end_logits - torch.log(torch.exp(span_end_logits).sum(-1)).unsqueeze(-1)
+                # print(end_smooth_probs)
+                # print(start_smooth_probs)
+                # print(span_end_log_probs)
+                # print(span_start_log_probs)
+                start_loss = self._loss(span_start_log_probs, start_smooth_probs)
+                end_loss = self._loss(span_end_log_probs, end_smooth_probs)
 
             span_start_end_loss = (start_loss + end_loss) / 2
             loss.add_(span_start_end_loss)
-
             self._span_start_accuracy(span_start_logits, span_start, span_mask)
             self._span_end_accuracy(span_end_logits, span_end, span_mask)
 
