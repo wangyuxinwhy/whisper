@@ -17,9 +17,9 @@ from allennlp.modules.text_field_embedders import BasicTextFieldEmbedder
 from allennlp.modules.token_embedders import PretrainedTransformerEmbedder
 from allennlp.training.metrics import BooleanAccuracy, CategoricalAccuracy
 
-from ..nn.util import get_sequence_distance_from_span_endpoint
+from ..nn.util import get_sequence_distance_from_span_endpoint, batch_span_jaccard
 from ..common import get_best_span, get_candidate_span
-from ..training.metrics import Jaccard
+from ..training.metrics import Jaccard, LossLog
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,7 @@ class TweetJointly(Model):
         sentiment_seq2vec: Optional[Seq2VecEncoder] = None,
         candidate_span_task: bool = False,
         candidate_span_task_weight: float = 1.0,
+        candidate_delay: int = 30000,
         candidate_span_num: int = 5,
         candidate_classification_layer_units: int = 128,
         candidate_span_extractor: Optional[SpanExtractor] = None,
@@ -59,6 +60,8 @@ class TweetJointly(Model):
         self._span_end_accuracy = CategoricalAccuracy()
         self._span_accuracy = BooleanAccuracy()
         self._jaccard = Jaccard()
+        self._candidate_delay = candidate_delay
+        self._delay = 0
 
         self._smoothing = smoothing
         self._smooth_alpha = smooth_alpha
@@ -71,6 +74,7 @@ class TweetJointly(Model):
         self._sentiment_task = sentiment_task
         if self._sentiment_task:
             self._sentiment_classification_accuracy = CategoricalAccuracy()
+            self._sentiment_loss_log = LossLog()
             self.register_buffer(
                 "sentiment_task_weight", torch.tensor(sentiment_task_weight)
             )
@@ -102,6 +106,7 @@ class TweetJointly(Model):
                 candidate_classification_layer_units
             )
             self._span_classification_accuracy = CategoricalAccuracy()
+            self._candidate_loss_log = LossLog()
             self._candidate_span_linear = nn.Linear(
                 self._text_field_embedder.get_output_dim(),
                 self._candidate_classification_layer_units,
@@ -127,6 +132,11 @@ class TweetJointly(Model):
 
             self._candidate_jaccard = Jaccard()
 
+        if sentiment_task or candidate_span_task:
+            self._base_loss_log = LossLog()
+        else:
+            self._base_loss_log = None
+
         if dropout is not None:
             self._dropout = nn.Dropout(dropout)
         else:
@@ -141,12 +151,11 @@ class TweetJointly(Model):
         selected_text_span: Optional[torch.IntTensor] = None,
         metadata: List[Dict[str, Any]] = None,
     ) -> Dict[str, torch.Tensor]:
-
         # batch_size * text_length * hidden_dims
         embedded_question = self._text_field_embedder(text_with_sentiment)
         if self._dropout is not None:
             embedded_question = self._dropout(embedded_question)
-
+        self._delay += int(embedded_question.size(0))
         # span start & span end task
         logits = self._linear_layer(embedded_question)
         span_start_logits, span_end_logits = logits.split(1, dim=-1)
@@ -197,6 +206,7 @@ class TweetJointly(Model):
 
             self._sentiment_classification_accuracy(sentiment_probs, sentiment)
             sentiment_loss = cross_entropy(sentiment_logits, sentiment)
+            self._sentiment_loss_log(sentiment_loss)
             loss.add_(self.sentiment_task_weight * sentiment_loss)
 
             predict_sentiment_idx = sentiment_probs.argmax(dim=-1)
@@ -208,7 +218,7 @@ class TweetJointly(Model):
             output_dict["sentiment_predicts"] = sentiment_predicts
 
         # span classification
-        if self._candidate_span_task:
+        if self._candidate_span_task and (self._delay >= self._candidate_delay):
             # shape: (batch_size, passage_length, embedding_dim)
             text_features_for_candidate = self._candidate_span_linear(embedded_question)
             text_features_for_candidate = torch.relu(text_features_for_candidate)
@@ -230,20 +240,6 @@ class TweetJointly(Model):
                 text_features_for_candidate, candidate_span
             )
 
-            # # batch_size * candidate_num * passage_length
-            # candidate_span_mask = self.get_candidate_span_mask(
-            #     candidate_span, text_features_for_candidate.size()[1]
-            # )
-            # if self._candidate_with_context:
-            #     candidate_span_mask[:, :, 0] = 1
-            # # batch_size * candidate_num * passage_length * self._candidate_classification_layer_units
-            # masked_features = text_features_for_candidate.unsqueeze(
-            #     1
-            # ) * candidate_span_mask.unsqueeze(-1)
-            # span_length = candidate_span_mask.sum(-1)
-            # masked_features_summed = masked_features.sum(2)
-            # # batch_size * candidate_num * self._candidate_classification_layer_units
-            # span_feature_vec = masked_features_summed / span_length.unsqueeze(-1)
             if self._candidate_with_logits:
                 candidate_span_start_logits = torch.gather(
                     span_start_logits, 1, candidate_span[:, :, 0]
@@ -282,6 +278,7 @@ class TweetJointly(Model):
                 candidate_span_loss = cross_entropy(
                     span_classification_logits, candidate_span_label
                 )
+                self._candidate_loss_log(candidate_span_loss)
                 weighted_loss = self.candidate_span_task_weight * candidate_span_loss
                 if candidate_span_loss > 1e2:
                     print(f"candidate loss: {candidate_span_loss}")
@@ -354,6 +351,8 @@ class TweetJointly(Model):
                 end_loss = self._loss(span_end_log_probs, end_smooth_probs)
 
             span_start_end_loss = (start_loss + end_loss) / 2
+            if self._base_loss_log is not None:
+                self._base_loss_log(span_start_end_loss)
             loss.add_(span_start_end_loss)
             self._span_start_accuracy(span_start_logits, span_start, span_mask)
             self._span_end_accuracy(span_end_logits, span_end, span_mask)
@@ -382,18 +381,25 @@ class TweetJointly(Model):
 
         return output_dict
 
+    # @staticmethod
+    # def candidate_span_with_labels(
+    #     candidate_span: torch.Tensor, selected_text_span: torch.Tensor
+    # ) -> Tuple[torch.Tensor, torch.Tensor]:
+    #     correct_span_idx = (candidate_span == selected_text_span.unsqueeze(1)).prod(-1)
+    #     candidate_span_adjust = torch.where(
+    #         ~(correct_span_idx.unsqueeze(-1) == 1),
+    #         candidate_span,
+    #         selected_text_span.unsqueeze(1),
+    #     )
+    #     candidate_span_label = correct_span_idx.argmax(-1)
+    #     return candidate_span_adjust, candidate_span_label
+
     @staticmethod
     def candidate_span_with_labels(
         candidate_span: torch.Tensor, selected_text_span: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        correct_span_idx = (candidate_span == selected_text_span.unsqueeze(1)).prod(-1)
-        candidate_span_adjust = torch.where(
-            ~(correct_span_idx.unsqueeze(-1) == 1),
-            candidate_span,
-            selected_text_span.unsqueeze(1),
-        )
-        candidate_span_label = correct_span_idx.argmax(-1)
-        return candidate_span_adjust, candidate_span_label
+        candidate_span_label = batch_span_jaccard(candidate_span, selected_text_span).max(-1).indices
+        return candidate_span, candidate_span_label
 
     @staticmethod
     def get_candidate_span_mask(
@@ -471,8 +477,12 @@ class TweetJointly(Model):
                 "candidate_span_acc"
             ] = self._span_classification_accuracy.get_metric(reset)
             metrics["candidate_jaccard"] = self._candidate_jaccard.get_metric(reset)
+            metrics["candidate_loss"] = self._candidate_loss_log.get_metric(reset)
         if self._sentiment_task:
             metrics[
                 "sentiment_acc"
             ] = self._sentiment_classification_accuracy.get_metric(reset)
+            metrics["sentiment_loss"] = self._sentiment_loss_log.get_metric(reset)
+        if self._base_loss_log is not None:
+            metrics["base_loss"] = self._base_loss_log.get_metric(reset)
         return metrics
