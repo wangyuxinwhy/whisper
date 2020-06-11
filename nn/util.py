@@ -18,7 +18,7 @@ def batch_span_jaccard(candidate_spans: torch.Tensor, golden_span: torch.Tensor)
     diff_sum = diff_tensor.sum(-1)
     golden_span_width = (golden_span[:, 1] - golden_span[:, 0]) + 1
     candidate_span_width = (candidate_spans[:, :, 1] - candidate_spans[:, :, 0]) + 1
-    dividend = diff_sum + golden_span_width.unsqueeze(1)
+    dividend = torch.clamp_min_(diff_sum + golden_span_width.unsqueeze(1), 0)
     divisor = (candidate_span_width - dividend) + golden_span_width.unsqueeze(1)
     span_jaccard = torch.true_divide(dividend, divisor)
     return span_jaccard

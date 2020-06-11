@@ -170,3 +170,48 @@ class TweetSentimentDatasetReader(DatasetReader):
         fields["metadata"] = MetadataField(metadata)
 
         return Instance(fields)
+
+    def span_to_str(self, text, span_start, span_end):
+        text_tokens = self._tokenizer.tokenize(text)
+        text_tokens = self._tokenizer.add_special_tokens(text_tokens)
+        return span_tokens_to_text(text, text_tokens, span_start, span_end)
+
+
+def span_tokens_to_text(source_text, tokens, span_start, span_end):
+    text_with_sentiment_tokens = tokens
+    predicted_start = span_start
+    predicted_end = span_end
+
+    while (
+        predicted_start >= 0
+        and text_with_sentiment_tokens[predicted_start].idx is None
+    ):
+        predicted_start -= 1
+    if predicted_start < 0:
+        character_start = 0
+    else:
+        character_start = text_with_sentiment_tokens[predicted_start].idx
+
+    while (
+        predicted_end < len(text_with_sentiment_tokens)
+        and text_with_sentiment_tokens[predicted_end].idx is None
+    ):
+        predicted_end -= 1
+
+    if predicted_end >= len(text_with_sentiment_tokens):
+        print(text_with_sentiment_tokens)
+        print(len(text_with_sentiment_tokens))
+        print(span_end)
+        print(predicted_end)
+        character_end = len(source_text)
+    else:
+        end_token = text_with_sentiment_tokens[predicted_end]
+        if end_token.idx == 0:
+            character_end = (
+                end_token.idx + len(sanitize_wordpiece(end_token.text)) + 1
+            )
+        else:
+            character_end = end_token.idx + len(sanitize_wordpiece(end_token.text))
+
+    best_span_string = source_text[character_start:character_end].strip()
+    return best_span_string
