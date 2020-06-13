@@ -225,7 +225,7 @@ class TweetJointly(Model):
             with torch.no_grad():
                 # batch_size * candidate_num * 2
                 candidate_span = get_candidate_span(
-                    span_start_logits, span_end_logits, self._candidate_span_num
+                    span_start_probs, span_end_probs, self._candidate_span_num
                 )
                 candidate_span_list = candidate_span.tolist()
                 output_dict["candidate_spans"] = candidate_span_list

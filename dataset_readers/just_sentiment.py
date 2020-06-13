@@ -49,9 +49,7 @@ class JustSentimentDatasetReader(DatasetReader):
     def text_to_instance(
         self,
         text: str,
-        sentiment: str,
-        text_id: Optional[str] = None,
-        selected_text: Optional[str] = None,
+        sentiment: Optional[str] = None,
     ) -> Instance:
         fields = {}
         text_tokens = self._tokenizer.tokenize(text)
@@ -59,5 +57,6 @@ class JustSentimentDatasetReader(DatasetReader):
         fields["tokens"] = TextField(
             text_tokens, {"tokens": self._tokenindexer}
         )
-        fields["label"] = LabelField(sentiment)
+        if sentiment:
+            fields["label"] = LabelField(sentiment)
         return Instance(fields)
