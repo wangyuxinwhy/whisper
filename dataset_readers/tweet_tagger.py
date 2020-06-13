@@ -38,18 +38,17 @@ class TweetTaggerDatasetReader(DatasetReader):
         file_path = cached_path(file_path)
         df = pd.read_csv(file_path)
         for record in df.to_dict("records"):
-            if record["selected_text"]:
-                text = record["text"]
-                if not isinstance(text, str):
-                    continue
-                elif text.strip() == "":
-                    continue
-                else:
-                    yield self.text_to_instance(
-                        " " + text.strip(),
-                        record["sentiment"],
-                        record["selected_text"],
-                    )
+            text = record["text"]
+            if not isinstance(text, str):
+                continue
+            elif text.strip() == "":
+                continue
+            else:
+                yield self.text_to_instance(
+                    " " + text.strip(),
+                    record["sentiment"],
+                    record.get("selected_text"),
+                )
 
     def text_to_instance(
         self,
@@ -120,18 +119,13 @@ class TweetTaggerDatasetReader(DatasetReader):
                     ],
                     (first_answer_offset, first_answer_offset + len(answer)),
                 )
-            tags = ["o"] * len(tokens_field)
-            for i in range(token_answer_span_start, token_answer_span_end+1):
-                tags[i] = "t"
-            try:
-                fields["tags"] = SequenceLabelField(
-                    tags, tokens_field
-                )
-            except:
-                print(tags)
-                print(tokens_field)
-                print(len(tags))
-                print(len(tokens_field))
+            tags = ["O"] * len(tokens_field)
+            tags[token_answer_span_start] = "B"
+            for i in range(token_answer_span_start+1, token_answer_span_end+1):
+                tags[i] = "I"
+            fields["tags"] = SequenceLabelField(
+                tags, tokens_field
+            )
 
 
         # make the metadata
