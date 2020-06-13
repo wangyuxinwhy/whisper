@@ -286,25 +286,25 @@ class TweetJointly(Model):
                     print(f"candidate_span_label: {candidate_span_label}")
                 loss.add_(weighted_loss)
 
-                candidate_best_spans = candidate_best_spans.detach().cpu().numpy()
-                output_dict["best_candidate_span_str"] = []
-                for metadata_entry, best_span in zip(metadata, candidate_best_spans):
-                    text_with_sentiment_tokens = metadata_entry[
-                        "text_with_sentiment_tokens"
-                    ]
-                    predicted_start, predicted_end = tuple(best_span)
-                    if predicted_end >= len(text_with_sentiment_tokens):
-                        predicted_end = len(text_with_sentiment_tokens) - 1
-                    best_span_string = self.span_tokens_to_text(
-                        metadata_entry["text"],
-                        text_with_sentiment_tokens,
-                        predicted_start,
-                        predicted_end,
-                    )
-                    output_dict["best_candidate_span_str"].append(best_span_string)
-                    answers = metadata_entry.get("selected_text", "")
-                    if len(answers) > 0:
-                        self._candidate_jaccard(best_span_string, answers)
+            candidate_best_spans = candidate_best_spans.detach().cpu().numpy()
+            output_dict["best_candidate_span_str"] = []
+            for metadata_entry, best_span in zip(metadata, candidate_best_spans):
+                text_with_sentiment_tokens = metadata_entry[
+                    "text_with_sentiment_tokens"
+                ]
+                predicted_start, predicted_end = tuple(best_span)
+                if predicted_end >= len(text_with_sentiment_tokens):
+                    predicted_end = len(text_with_sentiment_tokens) - 1
+                best_span_string = self.span_tokens_to_text(
+                    metadata_entry["text"],
+                    text_with_sentiment_tokens,
+                    predicted_start,
+                    predicted_end,
+                )
+                output_dict["best_candidate_span_str"].append(best_span_string)
+                answers = metadata_entry.get("selected_text", "")
+                if len(answers) > 0:
+                    self._candidate_jaccard(best_span_string, answers)
 
         # Compute the loss for training.
         if selected_text_span is not None:

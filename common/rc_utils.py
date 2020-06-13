@@ -92,7 +92,7 @@ def char_span_to_token_span(
         # said "split with Luckett and Roberson".  In this case, we'll just keep the end index
         # where it is, and assume the intent was to mark the whole token.
         logger.debug("Bad labelling or tokenization - end offset doesn't match")
-    if token_offsets[end_index][1] != character_span[1]:
+    elif token_offsets[end_index][1] != character_span[1]:
         error = True
     return (start_index, end_index), error
 

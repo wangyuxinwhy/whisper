@@ -47,7 +47,7 @@ class TweetSentimentDatasetReader(DatasetReader):
                     continue
                 else:
                     yield self.text_to_instance(
-                        " " + text.strip(),
+                        "" + text.strip(),
                         record["sentiment"],
                         record["textID"],
                         record["selected_text"],

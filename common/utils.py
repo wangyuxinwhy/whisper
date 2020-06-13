@@ -7,6 +7,7 @@ import tempfile
 import atexit
 from pathlib import Path
 from typing import Optional, List
+from collections import defaultdict
 
 import torch
 import pandas as pd
@@ -60,34 +61,45 @@ def gen_cv_json(base_json_path, cv_num=5):
             f.write(text)
 
 
-def get_cv_metric(cv_models_dir, cv_num=5):
+# def get_cv_metric(cv_models_dir, cv_num=5):
+#     dir_path = Path(cv_models_dir).resolve()
+#     best_epochs = []
+#     best_validation_span_acc = []
+#     best_validation_jaccard = []
+#     best_validation_loss = []
+#     for i in range(cv_num):
+#         metrics_json_path = dir_path / f"cv{i}" / "metrics.json"
+#         metrics = json.loads(metrics_json_path.read_text())
+#         best_epochs.append(metrics["best_epoch"] + 1)
+#         best_validation_span_acc.append(metrics["best_validation_span_acc"])
+#         best_validation_jaccard.append(metrics["best_validation_jaccard"])
+#         best_validation_loss.append(metrics["best_validation_loss"])
+#     best_epochs_avg = sum(best_epochs) / len(best_epochs)
+#     best_validation_span_acc_avg = sum(best_validation_span_acc) / len(best_validation_span_acc)
+#     best_validation_jaccard_avg = sum(best_validation_jaccard) / len(best_validation_jaccard)
+#     best_validation_loss_avg = sum(best_validation_loss) / len(best_validation_loss)
+#     return {
+#         "cv_models_dir": str(cv_models_dir),
+#         "best_epochs": best_epochs,
+#         "best_validation_span_acc": best_validation_span_acc,
+#         "best_validation_jaccard": best_validation_jaccard,
+#         "best_validation_loss": best_validation_loss,
+#         "best_epochs_avg": best_epochs_avg,
+#         "best_validation_span_acc_avg": best_validation_span_acc_avg,
+#         "best_validation_jaccard_avg": best_validation_jaccard_avg,
+#         "best_validation_loss_avg": best_validation_loss_avg
+#     }
+
+
+def get_cv_metric(cv_models_dir, collect_metrics, cv_num=5):
     dir_path = Path(cv_models_dir).resolve()
-    best_epochs = []
-    best_validation_span_acc = []
-    best_validation_jaccard = []
-    best_validation_loss = []
+    output = defaultdict(list)
     for i in range(cv_num):
         metrics_json_path = dir_path / f"cv{i}" / "metrics.json"
         metrics = json.loads(metrics_json_path.read_text())
-        best_epochs.append(metrics["best_epoch"] + 1)
-        best_validation_span_acc.append(metrics["best_validation_span_acc"])
-        best_validation_jaccard.append(metrics["best_validation_jaccard"])
-        best_validation_loss.append(metrics["best_validation_loss"])
-    best_epochs_avg = sum(best_epochs) / len(best_epochs)
-    best_validation_span_acc_avg = sum(best_validation_span_acc) / len(best_validation_span_acc)
-    best_validation_jaccard_avg = sum(best_validation_jaccard) / len(best_validation_jaccard)
-    best_validation_loss_avg = sum(best_validation_loss) / len(best_validation_loss)
-    return {
-        "cv_models_dir": str(cv_models_dir),
-        "best_epochs": best_epochs,
-        "best_validation_span_acc": best_validation_span_acc,
-        "best_validation_jaccard": best_validation_jaccard,
-        "best_validation_loss": best_validation_loss,
-        "best_epochs_avg": best_epochs_avg,
-        "best_validation_span_acc_avg": best_validation_span_acc_avg,
-        "best_validation_jaccard_avg": best_validation_jaccard_avg,
-        "best_validation_loss_avg": best_validation_loss_avg
-    }
+        for m in collect_metrics:
+            output[m].append(metrics[m])
+    return output
 
 
 def generate_candidate_span(start_logits: torch.Tensor, end_logits: torch.Tensor, num_candidate : int = 10):
@@ -132,6 +144,7 @@ def ensemble_model_avg_logits(models: List[dict], test_dataframe, weight: Option
 
     for model_dict in tqdm(models):
         archive = load_archive(**model_dict)
+        archive.model._delay = 50000
         predictor = Predictor.from_archive(archive, "tweet_sentiment")
 
         results, outputs = predict_test_data(test_dataframe, predictor)
@@ -153,7 +166,7 @@ def ensemble_model_avg_logits(models: List[dict], test_dataframe, weight: Option
         single_sample_end_logits = []
         for j in start_cv_logits:
             single_sample_start_logits.append(torch.tensor(j[i]))
-        for k in start_cv_logits:
+        for k in end_cv_logits:
             single_sample_end_logits.append(torch.tensor(k[i]))
         stack_j = torch.stack(single_sample_start_logits, dim=1)
         stack_k = torch.stack(single_sample_end_logits, dim=1)
