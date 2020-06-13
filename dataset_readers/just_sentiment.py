@@ -55,13 +55,9 @@ class JustSentimentDatasetReader(DatasetReader):
     ) -> Instance:
         fields = {}
         text_tokens = self._tokenizer.tokenize(text)
-        sentiment_tokens = self._tokenizer.tokenize(sentiment)
         # add special tokens
-        text_with_sentiment_tokens = self._tokenizer.add_special_tokens(
-            text_tokens, sentiment_tokens
-        )
         fields["tokens"] = TextField(
-            text_with_sentiment_tokens, {"tokens": self._tokenindexer}
+            text_tokens, {"tokens": self._tokenindexer}
         )
         fields["label"] = LabelField(sentiment)
         return Instance(fields)
