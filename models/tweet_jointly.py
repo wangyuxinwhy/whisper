@@ -15,6 +15,7 @@ from allennlp.common.util import sanitize_wordpiece
 from allennlp.common.checks import ConfigurationError
 from allennlp.modules.text_field_embedders import BasicTextFieldEmbedder
 from allennlp.modules.token_embedders import PretrainedTransformerEmbedder
+from allennlp.modules import FeedForward
 from allennlp.training.metrics import BooleanAccuracy, CategoricalAccuracy
 
 from whisper.modules.token_embedders.tweet_bert_embedder import TweetBertEmbedder
@@ -31,6 +32,7 @@ class TweetJointly(Model):
         self,
         vocab: Vocabulary,
         transformer_model_name: str = "bert-base-uncased",
+        feedforward: Optional[FeedForward] = None,
         smoothing: bool = False,
         smooth_alpha: float = 0.7,
         sentiment_task: bool = False,
@@ -57,11 +59,14 @@ class TweetJointly(Model):
                 {"tokens": TweetBertEmbedder(transformer_model_name)}
             )
         # span start & end task
-        self._linear_layer = nn.Sequential(
-            nn.Linear(self._text_field_embedder.get_output_dim(), 128),
-            nn.ReLU(),
-            nn.Linear(128, 2),
-        )
+        if feedforward is None:
+            self._linear_layer = nn.Sequential(
+                nn.Linear(self._text_field_embedder.get_output_dim(), 128),
+                nn.ReLU(),
+                nn.Linear(128, 2),
+            )
+        else:
+            self._linear_layer = feedforward
         self._span_start_accuracy = CategoricalAccuracy()
         self._span_end_accuracy = CategoricalAccuracy()
         self._span_accuracy = BooleanAccuracy()
@@ -328,6 +333,7 @@ class TweetJointly(Model):
                     logger.critical("Start loss too high (%r)", start_loss)
                     logger.critical("span_start_logits: %r", span_start_logits)
                     logger.critical("span_start: %r", span_start)
+                    logger.critical("text_with_sentiment: %r", text_with_sentiment)
                     assert False
 
                 end_loss = cross_entropy(span_end_logits, span_end, ignore_index=-1)

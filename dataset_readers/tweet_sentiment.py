@@ -116,7 +116,8 @@ class TweetSentimentDatasetReader(DatasetReader):
                 if wordpiece.idx is not None:
                     wordpiece.idx += token_start
                 tokenized_context.append(wordpiece)
-
+            if tokenized_context[0].idx is not None:
+                tokenized_context.insert(0, Token(text="CLS"))
             if first_answer_offset is None:
                 (token_answer_span_start, token_answer_span_end) = (-1, -1)
             else:
@@ -132,6 +133,14 @@ class TweetSentimentDatasetReader(DatasetReader):
                     ],
                     (first_answer_offset, first_answer_offset + len(answer)),
                 )
+            if token_answer_span_start == 0:
+                print(tokenized_context)
+                print(text_with_sentiment_tokens)
+                print(token_answer_span_end)
+                print(selected_text)
+                print(text)
+                assert False
+
             fields["selected_text_span"] = SpanField(
                 token_answer_span_start,
                 token_answer_span_end,

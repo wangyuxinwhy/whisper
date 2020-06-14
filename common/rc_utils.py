@@ -74,26 +74,27 @@ def char_span_to_token_span(
         # We want a character span that goes beyond the last token. Let's see if this is salvageable.
         # We consider this salvageable if the span we're looking for starts before the last token ends.
         # In other words, we don't salvage if the whole span comes after the tokens end.
-        if character_span[0] < token_offsets[-1][1]:
-            # We also want to make sure we aren't way off. We need to be within 8 characters to salvage.
-            if character_span[1] - 8 < token_offsets[-1][1]:
-                end_index -= 1
+        if token_offsets[-1] is not None:
+            if character_span[0] < token_offsets[-1][1]:
+                # We also want to make sure we aren't way off. We need to be within 8 characters to salvage.
+                if character_span[1] - 8 < token_offsets[-1][1]:
+                    end_index -= 1
 
-    if end_index >= len(token_offsets):
-        raise ValueError("Character span %r outside the range of the given tokens.")
-    if end_index == start_index and token_offsets[end_index][1] > character_span[1]:
-        # Looks like there was a token that should have been split, like "1854-1855", where the
-        # answer is "1854".  We can't do much in this case, except keep the answer as the whole
-        # token.
-        logger.debug("Bad tokenization - end offset doesn't match")
-    elif token_offsets[end_index][1] > character_span[1]:
-        # This is a case where the given answer span is more than one token, and the last token is
-        # cut off for some reason, like "split with Luckett and Rober", when the original passage
-        # said "split with Luckett and Roberson".  In this case, we'll just keep the end index
-        # where it is, and assume the intent was to mark the whole token.
-        logger.debug("Bad labelling or tokenization - end offset doesn't match")
-    elif token_offsets[end_index][1] != character_span[1]:
-        error = True
+    # if end_index >= len(token_offsets):
+    #     raise ValueError("Character span %r outside the range of the given tokens.")
+    # if end_index == start_index and token_offsets[end_index][1] > character_span[1]:
+    #     # Looks like there was a token that should have been split, like "1854-1855", where the
+    #     # answer is "1854".  We can't do much in this case, except keep the answer as the whole
+    #     # token.
+    #     logger.debug("Bad tokenization - end offset doesn't match")
+    # elif token_offsets[end_index][1] > character_span[1]:
+    #     # This is a case where the given answer span is more than one token, and the last token is
+    #     # cut off for some reason, like "split with Luckett and Rober", when the original passage
+    #     # said "split with Luckett and Roberson".  In this case, we'll just keep the end index
+    #     # where it is, and assume the intent was to mark the whole token.
+    #     logger.debug("Bad labelling or tokenization - end offset doesn't match")
+    # elif token_offsets[end_index][1] != character_span[1]:
+    #     error = True
     return (start_index, end_index), error
 
 

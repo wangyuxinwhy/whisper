@@ -120,8 +120,7 @@ class TweetTaggerDatasetReader(DatasetReader):
                     (first_answer_offset, first_answer_offset + len(answer)),
                 )
             tags = ["O"] * len(tokens_field)
-            tags[token_answer_span_start] = "B"
-            for i in range(token_answer_span_start+1, token_answer_span_end+1):
+            for i in range(token_answer_span_start, token_answer_span_end+1):
                 tags[i] = "I"
             fields["tags"] = SequenceLabelField(
                 tags, tokens_field
