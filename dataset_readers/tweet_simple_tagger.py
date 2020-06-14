@@ -1,20 +1,21 @@
 # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from typing import Iterable, Optional
 
 import pandas as pd
-from whisper.common.utils import sanitize_wordpiece
+from allennlp.common.util import sanitize_wordpiece
 
 from allennlp.data import Tokenizer, TokenIndexer, Instance, DatasetReader, Token
 from allennlp.data.token_indexers import PretrainedTransformerIndexer
 from allennlp.data.tokenizers import PretrainedTransformerTokenizer
-from allennlp.data.fields import TextField, LabelField, SpanField, MetadataField
+from allennlp.data.fields import TextField, LabelField, SequenceLabelField, MetadataField
 from allennlp.common.file_utils import cached_path
 
 from whisper.common.rc_utils import char_span_to_token_span
 
 
-@DatasetReader.register("tweet_sentiment")
-class TweetSentimentDatasetReader(DatasetReader):
+@DatasetReader.register("tweet_simple_tagger")
+class TweetTaggerDatasetReader(DatasetReader):
     def __init__(
         self,
         lazy: bool = False,
@@ -22,7 +23,6 @@ class TweetSentimentDatasetReader(DatasetReader):
         max_instances: Optional[int] = None,
         tokenizer: Optional[Tokenizer] = None,
         tokenindexer: Optional[TokenIndexer] = None,
-        sentiment_first: bool = False,
     ) -> None:
         super().__init__(
             lazy=lazy, cache_directory=cache_directory, max_instances=max_instances
@@ -33,31 +33,27 @@ class TweetSentimentDatasetReader(DatasetReader):
         self._tokenindexer = tokenindexer or PretrainedTransformerIndexer(
             model_name="bert-base-uncased"
         )
-        self._sentiment_first = sentiment_first
 
     def _read(self, file_path: str) -> Iterable[Instance]:
         file_path = cached_path(file_path)
         df = pd.read_csv(file_path)
         for record in df.to_dict("records"):
-            if record["selected_text"]:
-                text = record["text"]
-                if not isinstance(text, str):
-                    continue
-                elif text.strip() == "":
-                    continue
-                else:
-                    yield self.text_to_instance(
-                        " " + text.strip(),
-                        record["sentiment"],
-                        record["textID"],
-                        record["selected_text"],
-                    )
+            text = record["text"]
+            if not isinstance(text, str):
+                continue
+            elif text.strip() == "":
+                continue
+            else:
+                yield self.text_to_instance(
+                    " " + text.strip(),
+                    record["sentiment"],
+                    record.get("selected_text"),
+                )
 
     def text_to_instance(
         self,
         text: str,
         sentiment: str,
-        text_id: Optional[str] = None,
         selected_text: Optional[str] = None,
     ) -> Instance:
         fields = {}
@@ -68,19 +64,10 @@ class TweetSentimentDatasetReader(DatasetReader):
         text_with_sentiment_tokens = self._tokenizer.add_special_tokens(
             text_tokens, sentiment_tokens
         )
-        fields["text_with_sentiment"] = TextField(
+        tokens_field = TextField(
             text_with_sentiment_tokens, {"tokens": self._tokenindexer}
         )
-        text_start = len(self._tokenizer.sequence_pair_start_tokens)
-        fields["text_span"] = SpanField(
-            text_start,
-            text_start + len(text_tokens) - 1,
-            fields["text_with_sentiment"],
-        )
-        text_tokens = self._tokenizer.add_special_tokens(text_tokens)
-
-        fields["text"] = TextField(text_tokens, {"tokens": self._tokenindexer})
-        fields["sentiment"] = LabelField(sentiment)
+        fields["tokens"] = tokens_field
 
         additional_metadata = {}
         if selected_text is not None:
@@ -132,19 +119,19 @@ class TweetSentimentDatasetReader(DatasetReader):
                     ],
                     (first_answer_offset, first_answer_offset + len(answer)),
                 )
-            fields["selected_text_span"] = SpanField(
-                token_answer_span_start,
-                token_answer_span_end,
-                fields["text_with_sentiment"],
+            tags = ["O"] * len(tokens_field)
+            for i in range(token_answer_span_start, token_answer_span_end+1):
+                tags[i] = "I"
+            fields["tags"] = SequenceLabelField(
+                tags, tokens_field
             )
 
-        if text_id is not None:
-            additional_metadata["text_id"] = text_id
 
         # make the metadata
         metadata = {
             "text": text,
             "sentiment": sentiment,
+            "words": text,
             "text_with_sentiment_tokens": text_with_sentiment_tokens,
         }
         if additional_metadata:

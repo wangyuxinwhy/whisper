@@ -17,6 +17,7 @@ from allennlp.modules.text_field_embedders import BasicTextFieldEmbedder
 from allennlp.modules.token_embedders import PretrainedTransformerEmbedder
 from allennlp.training.metrics import BooleanAccuracy, CategoricalAccuracy
 
+from whisper.modules.token_embedders.tweet_bert_embedder import TweetBertEmbedder
 from ..nn.util import get_sequence_distance_from_span_endpoint, batch_span_jaccard
 from ..common import get_best_span, get_candidate_span
 from ..training.metrics import Jaccard, LossLog
@@ -47,9 +48,14 @@ class TweetJointly(Model):
         **kwargs,
     ) -> None:
         super().__init__(vocab, **kwargs)
-        self._text_field_embedder = BasicTextFieldEmbedder(
-            {"tokens": PretrainedTransformerEmbedder(transformer_model_name)}
-        )
+        if "BERTweet" not in transformer_model_name:
+            self._text_field_embedder = BasicTextFieldEmbedder(
+                {"tokens": PretrainedTransformerEmbedder(transformer_model_name)}
+            )
+        else:
+            self._text_field_embedder = BasicTextFieldEmbedder(
+                {"tokens": TweetBertEmbedder(transformer_model_name)}
+            )
         # span start & end task
         self._linear_layer = nn.Sequential(
             nn.Linear(self._text_field_embedder.get_output_dim(), 128),

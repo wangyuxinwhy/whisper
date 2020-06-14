@@ -182,3 +182,19 @@ def ensemble_model_avg_logits(models: List[dict], test_dataframe, weight: Option
         output_dataframe[f"model{idx+1}_end_logits"] = cv_logits
     output_dataframe["ensemble_end_logits"] = ensemble_end_logits
     return output_dataframe, cv_outputs, cv_results
+
+
+def sanitize_wordpiece(wordpiece: str) -> str:
+    """
+    Sanitizes wordpieces from BERT, RoBERTa or ALBERT tokenizers.
+    """
+    if wordpiece.startswith("##"):
+        return wordpiece[2:]
+    elif wordpiece.startswith("Ġ"):
+        return wordpiece[1:]
+    elif wordpiece.startswith("▁"):
+        return wordpiece[1:]
+    elif wordpiece.endswith("@@"):
+        return wordpiece[:-2]
+    else:
+        return wordpiece
